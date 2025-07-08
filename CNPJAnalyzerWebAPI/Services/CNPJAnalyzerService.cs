@@ -7,7 +7,6 @@ namespace CNPJAnalyzerWebAPI.Services;
 
 public class CNPJAnalyzerService
 {
-    
     private static readonly Dictionary<string, Regex[]> LanguageSpecificPatterns = new()
     {
         // C# e .NET
@@ -83,11 +82,19 @@ public class CNPJAnalyzerService
             new Regex(@"CONVERT\s*\(\s*BIGINT\s*,\s*\w*cnpj\w*\s*\)", RegexOptions.Compiled | RegexOptions.IgnoreCase),
             new Regex(@"LEN\s*\(\s*\w*cnpj\w*\s*\)\s*[!=<>]+\s*14", RegexOptions.Compiled | RegexOptions.IgnoreCase),
             new Regex(@"LENGTH\s*\(\s*\w*cnpj\w*\s*\)\s*[!=<>]+\s*14", RegexOptions.Compiled | RegexOptions.IgnoreCase),
+        },
+        
+        // TypeScript
+        [".ts"] = new[]
+        {
+            new Regex(@"parseInt\s*\(\s*\w*cnpj\w*\s*\)", RegexOptions.Compiled | RegexOptions.IgnoreCase),
+            new Regex(@"parseFloat\s*\(\s*\w*cnpj\w*\s*\)", RegexOptions.Compiled | RegexOptions.IgnoreCase),
+            new Regex(@"Number\s*\(\s*\w*cnpj\w*\s*\)", RegexOptions.Compiled | RegexOptions.IgnoreCase),
+            new Regex(@"\.length\s*[!=<>]+\s*14", RegexOptions.Compiled | RegexOptions.IgnoreCase),
+            new Regex(@"type\s*:\s*['""]number['""]", RegexOptions.Compiled | RegexOptions.IgnoreCase),
         }
     };
 
-    
-    
     private static readonly Regex[] CNPJPatterns =
     {
         // Padrões básicos de CNPJ
@@ -117,8 +124,6 @@ public class CNPJAnalyzerService
         [".sql"] = new[] { "cnpj", "CNPJ", "cnpj_column", "cnpj_field" }
     };
 
-
-
     private static readonly string[] SupportedExtensions =
     {
         ".cs", ".js", ".ts", ".json", ".xml", ".config", ".txt", ".sql",
@@ -135,8 +140,6 @@ public class CNPJAnalyzerService
         "__pycache__/", ".pytest_cache/", "venv/", "env/", ".env/",
         "coverage/", ".nyc_output/", ".sass-cache/", "bower_components/"
     };
-
-
 
     public async Task<AnalysisResponse> AnalyzeZipFileAsync(Stream zipStream)
     {
@@ -184,13 +187,14 @@ public class CNPJAnalyzerService
     private bool ShouldAnalyzeFile(string fileName)
     {
         var extension = Path.GetExtension(fileName).ToLower();
-        return SupportedExtensions.Contains(extension) &&
-               !fileName.Contains("node_modules") &&
-               !fileName.Contains("bin/") &&
-               !fileName.Contains("obj/") &&
-               !fileName.Contains("packages/") &&
-               !fileName.Contains(".git/") &&
-               !fileName.Contains("vendor/");
+        
+        // Verificar se a extensão é suportada
+        if (!SupportedExtensions.Contains(extension))
+            return false;
+        
+        // Usar o array IgnorePaths para verificação mais robusta
+        return !IgnorePaths.Any(ignorePath => 
+            fileName.Contains(ignorePath, StringComparison.OrdinalIgnoreCase));
     }
 
     private async Task<List<CNPJAnalysisResult>> AnalyzeFileEntryAsync(ZipArchiveEntry entry)
@@ -228,7 +232,6 @@ public class CNPJAnalyzerService
             });
         }
 
-        // Remover duplicatas baseadas em linha, arquivo e tipo de problema
         return RemoveDuplicates(results);
     }
 
@@ -238,6 +241,370 @@ public class CNPJAnalyzerService
             .GroupBy(r => new { r.FilePath, r.LineNumber, r.IssueType })
             .Select(g => g.First())
             .ToList();
+    }
+
+    private List<CNPJAnalysisResult> AnalyzeLine(string filePath, int lineNumber, string line)
+    {
+        var results = new List<CNPJAnalysisResult>();
+        var foundMatches = new HashSet<string>();
+        
+        // Obter extensão do arquivo
+        var extension = Path.GetExtension(filePath).ToLower();
+        
+        // 1. Usar padrões específicos da linguagem SE existirem
+        if (LanguageSpecificPatterns.ContainsKey(extension))
+        {
+            foreach (var pattern in LanguageSpecificPatterns[extension])
+            {
+                var matches = pattern.Matches(line);
+                foreach (Match match in matches)
+                {
+                    var analysis = AnalyzeLanguageSpecificPattern(filePath, lineNumber, line, match, extension);
+                    if (analysis != null && !foundMatches.Contains(analysis.DetectedCNPJ))
+                    {
+                        results.Add(analysis);
+                        foundMatches.Add(analysis.DetectedCNPJ);
+                    }
+                }
+            }
+        }
+        
+        // 2. Verificar se a linha contém referências a CNPJ
+        if (ContainsCNPJReference(line, filePath))
+        {
+            var potentialIssue = AnalyzeCNPJReferenceLine(filePath, lineNumber, line);
+            if (potentialIssue != null && !foundMatches.Contains(potentialIssue.DetectedCNPJ))
+            {
+                results.Add(potentialIssue);
+                foundMatches.Add(potentialIssue.DetectedCNPJ);
+            }
+        }
+
+        // 3. Procurar por padrões de CNPJ específicos
+        foreach (var pattern in CNPJPatterns)
+        {
+            var matches = pattern.Matches(line);
+            foreach (Match match in matches)
+            {
+                string cnpj = match.Groups.Count > 1 ? match.Groups[1].Value : match.Value;
+            
+                if (!foundMatches.Contains(cnpj))
+                {
+                    var analysis = AnalyzeCNPJ(cnpj, filePath, lineNumber, line);
+                    if (analysis != null)
+                    {
+                        results.Add(analysis);
+                        foundMatches.Add(cnpj);
+                    }
+                }
+            }
+        }
+
+        return results;
+    }
+
+    private CNPJAnalysisResult AnalyzeLanguageSpecificPattern(string filePath, int lineNumber, string line, Match match, string extension)
+    {
+        var pattern = match.Value;
+        var issues = new List<string>();
+        var severity = "Medium";
+        var issueType = "LanguageSpecific";
+        
+        // Análise específica por linguagem
+        switch (extension)
+        {
+            case ".cs":
+                if (pattern.Contains("Convert.ToUInt64") || pattern.Contains("Convert.ToInt64"))
+                {
+                    issues.Add("Conversão numérica não suportará CNPJs alfanuméricos");
+                    severity = "High";
+                    issueType = "NumericConversion";
+                }
+                else if (pattern.Contains("ToString") && pattern.Contains("00\\.000\\.000"))
+                {
+                    issues.Add("Formatação hardcoded incompatível com formato alfanumérico");
+                    severity = "High";
+                    issueType = "HardcodedFormat";
+                }
+                else if (pattern.Contains("long.Parse") || pattern.Contains("int.Parse"))
+                {
+                    issues.Add("Parse numérico falhará com CNPJs alfanuméricos");
+                    severity = "High";
+                    issueType = "NumericConversion";
+                }
+                break;
+                
+            case ".java":
+                if (pattern.Contains("Integer.parseInt") || pattern.Contains("Long.parseLong"))
+                {
+                    issues.Add("Parsing numérico falhará com CNPJs alfanuméricos");
+                    severity = "High";
+                    issueType = "NumericConversion";
+                }
+                else if (pattern.Contains("BigInteger"))
+                {
+                    issues.Add("BigInteger não suportará caracteres alfanuméricos");
+                    severity = "High";
+                    issueType = "NumericConversion";
+                }
+                else if (pattern.Contains("String.format") && pattern.Contains("%02d"))
+                {
+                    issues.Add("Formatação numérica não funcionará com caracteres alfanuméricos");
+                    severity = "High";
+                    issueType = "HardcodedFormat";
+                }
+                break;
+                
+            case ".js":
+            case ".ts":
+                if (pattern.Contains("parseInt") || pattern.Contains("parseFloat") || pattern.Contains("Number("))
+                {
+                    issues.Add("Conversão numérica JavaScript incompatível");
+                    severity = "High";
+                    issueType = "NumericConversion";
+                }
+                else if (pattern.Contains("type") && pattern.Contains("number"))
+                {
+                    issues.Add("Tipo 'number' não suportará CNPJs alfanuméricos");
+                    severity = "High";
+                    issueType = "TypeDefinition";
+                }
+                break;
+                
+            case ".py":
+                if (pattern.Contains("int(") || pattern.Contains("float("))
+                {
+                    issues.Add("Conversão numérica Python incompatível");
+                    severity = "High";
+                    issueType = "NumericConversion";
+                }
+                else if (pattern.Contains("format") && pattern.Contains("{:02d}"))
+                {
+                    issues.Add("Formatação numérica não funcionará com caracteres alfanuméricos");
+                    severity = "High";
+                    issueType = "HardcodedFormat";
+                }
+                break;
+                
+            case ".php":
+                if (pattern.Contains("intval") || pattern.Contains("floatval"))
+                {
+                    issues.Add("Conversão numérica PHP incompatível");
+                    severity = "High";
+                    issueType = "NumericConversion";
+                }
+                else if (pattern.Contains("sprintf") && pattern.Contains("%02d"))
+                {
+                    issues.Add("Formatação numérica não funcionará com caracteres alfanuméricos");
+                    severity = "High";
+                    issueType = "HardcodedFormat";
+                }
+                break;
+                
+            case ".go":
+                if (pattern.Contains("strconv.Atoi") || pattern.Contains("strconv.ParseInt"))
+                {
+                    issues.Add("Conversão numérica Go incompatível");
+                    severity = "High";
+                    issueType = "NumericConversion";
+                }
+                else if (pattern.Contains("fmt.Sprintf") && pattern.Contains("%02d"))
+                {
+                    issues.Add("Formatação numérica não funcionará com caracteres alfanuméricos");
+                    severity = "High";
+                    issueType = "HardcodedFormat";
+                }
+                break;
+                
+            case ".rb":
+                if (pattern.Contains(".to_i") || pattern.Contains(".to_f") || pattern.Contains("Integer("))
+                {
+                    issues.Add("Conversão numérica Ruby incompatível");
+                    severity = "High";
+                    issueType = "NumericConversion";
+                }
+                break;
+                
+            case ".sql":
+                if (pattern.Contains("CAST") && pattern.Contains("BIGINT"))
+                {
+                    issues.Add("CAST para BIGINT incompatível com CNPJs alfanuméricos");
+                    severity = "High";
+                    issueType = "SQLType";
+                }
+                else if (pattern.Contains("CONVERT") && pattern.Contains("BIGINT"))
+                {
+                    issues.Add("CONVERT para BIGINT incompatível com CNPJs alfanuméricos");
+                    severity = "High";
+                    issueType = "SQLType";
+                }
+                break;
+        }
+        
+        if (issues.Any())
+        {
+            return new CNPJAnalysisResult
+            {
+                FilePath = filePath,
+                LineNumber = lineNumber,
+                LineContent = line.Trim(),
+                DetectedCNPJ = $"Padrão {extension}: {pattern}",
+                NeedsCorrection = true,
+                RecommendedAction = GetRecommendationForLanguage(extension, issueType),
+                IssueDescription = string.Join("; ", issues),
+                IssueType = issueType,
+                Severity = severity
+            };
+        }
+        
+        return null;
+    }
+
+    private bool ContainsCNPJReference(string line, string filePath = "")
+    {
+        var extension = Path.GetExtension(filePath).ToLower();
+        
+        // Usar keywords específicas da linguagem se disponíveis
+        if (LanguageKeywords.ContainsKey(extension))
+        {
+            return LanguageKeywords[extension].Any(keyword => 
+                line.Contains(keyword, StringComparison.OrdinalIgnoreCase));
+        }
+        
+        // Fallback para keywords gerais
+        var keywords = new[] { "cnpj", "CNPJ", "FormatCnpj", "formatCnpj", "cnpj_format", "cnpjFormat" };
+        return keywords.Any(keyword => line.Contains(keyword, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private CNPJAnalysisResult AnalyzeCNPJReferenceLine(string filePath, int lineNumber, string line)
+    {
+        var issues = new List<string>();
+        var severity = "Info";
+        var issueType = "CNPJReference";
+        var needsCorrection = false;
+
+        // Verificar problemas em ordem de prioridade
+        if (HasNumericConversion(line))
+        {
+            issues.Add("Conversão numérica não funcionará com CNPJs alfanuméricos");
+            severity = "High";
+            needsCorrection = true;
+            issueType = "NumericConversion";
+        }
+        else if (HasHardcodedFormatting(line))
+        {
+            issues.Add("Formatação hardcoded pode não funcionar com CNPJs alfanuméricos");
+            severity = "High";
+            needsCorrection = true;
+            issueType = "HardcodedFormat";
+        }
+        else if (HasRigidLengthValidation(line))
+        {
+            issues.Add("Validação de tamanho muito rígida");
+            severity = "Medium";
+            needsCorrection = true;
+            issueType = "LengthValidation";
+        }
+        else if (IsNumericOnlyValidation(line))
+        {
+            issues.Add("Validação assume apenas números");
+            severity = "High";
+            needsCorrection = true;
+            issueType = "NumericValidation";
+        }
+        else if (HasNumericSQLType(line))
+        {
+            issues.Add("Tipo de dados SQL inadequado");
+            severity = "High";
+            needsCorrection = true;
+            issueType = "SQLType";
+        }
+
+        // Só retornar resultado se há problemas reais
+        if (issues.Any())
+        {
+            return new CNPJAnalysisResult
+            {
+                FilePath = filePath,
+                LineNumber = lineNumber,
+                LineContent = line.Trim(),
+                DetectedCNPJ = "Referência a CNPJ detectada",
+                NeedsCorrection = needsCorrection,
+                RecommendedAction = GetRecommendationForLanguage(Path.GetExtension(filePath), issueType),
+                IssueDescription = string.Join("; ", issues),
+                IssueType = issueType,
+                Severity = severity
+            };
+        }
+
+        return null;
+    }
+
+    private CNPJAnalysisResult AnalyzeCNPJ(string cnpj, string filePath, int lineNumber, string line)
+    {
+        string cleanCNPJ = Regex.Replace(cnpj, @"[^\d]", "");
+
+        // Se é apenas um padrão de formatação ou conversão, não processar aqui
+        if (cnpj.Contains("00\\.000\\.000\\/0000\\-00") || 
+            cnpj.Contains("Convert.ToUInt64") || 
+            cnpj.Contains("ToString("))
+        {
+            return null; // Já foi processado pela análise de referência
+        }
+
+        // Verificar se a linha contém padrões problemáticos mesmo sem CNPJ válido
+        var hasProblematicPattern = HasNumericConversion(line) ||
+                                    HasHardcodedFormatting(line) ||
+                                    HasRigidLengthValidation(line);
+
+        if (cleanCNPJ.Length != 14 || !IsValidCNPJ(cleanCNPJ))
+        {
+            return null; // Não processar CNPJs inválidos aqui
+        }
+
+        var result = new CNPJAnalysisResult
+        {
+            FilePath = filePath,
+            LineNumber = lineNumber,
+            LineContent = line.Trim(),
+            DetectedCNPJ = cnpj,
+            NeedsCorrection = false,
+            RecommendedAction = "Nenhuma ação necessária",
+            IssueDescription = "CNPJ válido detectado",
+            IssueType = "None",
+            Severity = "Info"
+        };
+
+        var issues = new List<string>();
+
+        // Análise de potenciais problemas
+        if (IsNumericOnlyValidation(line))
+        {
+            result.NeedsCorrection = true;
+            result.IssueType = "NumericValidation";
+            result.Severity = "High";
+            issues.Add("Validação assume apenas números");
+            result.RecommendedAction = "Atualizar validação para aceitar caracteres alfanuméricos";
+        }
+        else if (HasRigidLengthValidation(line))
+        {
+            result.NeedsCorrection = true;
+            result.IssueType = "LengthValidation";
+            result.Severity = "Medium";
+            issues.Add("Validação de tamanho muito rígida");
+            result.RecommendedAction = "Flexibilizar validação de tamanho";
+        }
+        else if (HasNumericSQLType(line))
+        {
+            result.NeedsCorrection = true;
+            result.IssueType = "SQLType";
+            result.Severity = "High";
+            issues.Add("Tipo de dados SQL inadequado");
+            result.RecommendedAction = "Alterar tipo de coluna para VARCHAR/NVARCHAR";
+        }
+
+        result.IssueDescription = issues.Any() ? string.Join("; ", issues) : "CNPJ válido detectado";
+        return result;
     }
 
     private bool IsNumericOnlyValidation(string line)
@@ -274,7 +641,6 @@ public class CNPJAnalyzerService
         return patterns.Any(pattern => Regex.IsMatch(line, pattern, RegexOptions.IgnoreCase));
     }
 
-
     private bool HasNumericConversion(string line)
     {
         var patterns = new[]
@@ -286,7 +652,6 @@ public class CNPJAnalyzerService
         };
         return patterns.Any(pattern => Regex.IsMatch(line, pattern, RegexOptions.IgnoreCase));
     }
-
 
     private bool HasNumericSQLType(string line)
     {
@@ -319,6 +684,83 @@ public class CNPJAnalyzerService
         return digit1 == int.Parse(cnpj[12].ToString()) && digit2 == int.Parse(cnpj[13].ToString());
     }
 
+    private string GetRecommendationForLanguage(string extension, string issueType)
+    {
+        return extension switch
+        {
+            ".cs" => issueType switch
+            {
+                "NumericConversion" => "Usar string.IsNullOrEmpty() ao invés de conversões numéricas",
+                "HardcodedFormat" => "Implementar formatação dinâmica com StringBuilder ou Regex",
+                "LengthValidation" => "Usar validação flexível: cnpj?.Length >= 11 && cnpj.Length <= 18",
+                "SQLType" => "Alterar para NVARCHAR(18) ou VARCHAR(18)",
+                _ => "Revisar código C# para compatibilidade"
+            },
+            ".java" => issueType switch
+            {
+                "NumericConversion" => "Usar String.isEmpty() ao invés de parsing numérico",
+                "HardcodedFormat" => "Implementar formatação dinâmica com StringBuilder",
+                "LengthValidation" => "Usar validação flexível: cnpj.length() >= 11 && cnpj.length() <= 18",
+                _ => "Revisar código Java para compatibilidade"
+            },
+            ".js" => issueType switch
+            {
+                "NumericConversion" => "Usar typeof cnpj === 'string' ao invés de conversões numéricas",
+                "HardcodedFormat" => "Implementar formatação dinâmica com template strings",
+                "TypeDefinition" => "Alterar tipo para string",
+                _ => "Revisar código JavaScript para compatibilidade"
+            },
+            ".ts" => issueType switch
+            {
+                "NumericConversion" => "Usar typeof cnpj === 'string' ao invés de conversões numéricas",
+                "HardcodedFormat" => "Implementar formatação dinâmica com template strings",
+                "TypeDefinition" => "Alterar tipo para string",
+                _ => "Revisar código TypeScript para compatibilidade"
+            },
+            ".py" => issueType switch
+            {
+                "NumericConversion" => "Usar isinstance(cnpj, str) ao invés de conversões numéricas",
+                "HardcodedFormat" => "Implementar formatação dinâmica com f-strings",
+                _ => "Revisar código Python para compatibilidade"
+            },
+            ".php" => issueType switch
+            {
+                "NumericConversion" => "Usar is_string($cnpj) ao invés de conversões numéricas",
+                "HardcodedFormat" => "Implementar formatação dinâmica com substr()",
+                _ => "Revisar código PHP para compatibilidade"
+            },
+            ".go" => issueType switch
+            {
+                "NumericConversion" => "Usar validação de string ao invés de conversões numéricas",
+                "HardcodedFormat" => "Implementar formatação dinâmica com strings.Builder",
+                _ => "Revisar código Go para compatibilidade"
+            },
+            ".rb" => issueType switch
+            {
+                "NumericConversion" => "Usar cnpj.is_a?(String) ao invés de conversões numéricas",
+                _ => "Revisar código Ruby para compatibilidade"
+            },
+            ".sql" => issueType switch
+            {
+                "SQLType" => "Alterar para VARCHAR(18) ou NVARCHAR(18)",
+                _ => "Revisar queries SQL para compatibilidade"
+            },
+            _ => GetRecommendationForIssueType(issueType)
+        };
+    }
+
+    private string GetRecommendationForIssueType(string issueType)
+    {
+        return issueType switch
+        {
+            "NumericConversion" => "Remover conversões numéricas e tratar CNPJ como string",
+            "HardcodedFormat" => "Implementar formatação dinâmica que suporte caracteres alfanuméricos",
+            "LengthValidation" => "Flexibilizar validação de tamanho para aceitar variações",
+            "SQLType" => "Alterar tipo de coluna para VARCHAR/NVARCHAR",
+            _ => "Revisar código para compatibilidade com CNPJs alfanuméricos"
+        };
+    }
+
     private AnalysisStats GenerateStats(int totalFiles, List<CNPJAnalysisResult> results)
     {
         var issuesByType = results.Where(r => r.NeedsCorrection)
@@ -337,186 +779,6 @@ public class CNPJAnalyzerService
             CNPJsNeedingCorrection = results.Count(r => r.NeedsCorrection),
             IssuesByType = issuesByType,
             IssuesBySeverity = issuesBySeverity
-        };
-    }
-
-   
-private CNPJAnalysisResult AnalyzeCNPJ(string cnpj, string filePath, int lineNumber, string line)
-{
-    string cleanCNPJ = Regex.Replace(cnpj, @"[^\d]", "");
-
-    // Se é apenas um padrão de formatação ou conversão, não processar aqui
-    if (cnpj.Contains("00\\.000\\.000\\/0000\\-00") || 
-        cnpj.Contains("Convert.ToUInt64") || 
-        cnpj.Contains("ToString("))
-    {
-        return null; // Já foi processado pela análise de referência
-    }
-
-    // Verificar se a linha contém padrões problemáticos mesmo sem CNPJ válido
-    var hasProblematicPattern = HasNumericConversion(line) ||
-                                HasHardcodedFormatting(line) ||
-                                HasRigidLengthValidation(line);
-
-    if (cleanCNPJ.Length != 14 || !IsValidCNPJ(cleanCNPJ))
-    {
-        return null; // Não processar CNPJs inválidos aqui
-    }
-
-    var result = new CNPJAnalysisResult
-    {
-        FilePath = filePath,
-        LineNumber = lineNumber,
-        LineContent = line.Trim(),
-        DetectedCNPJ = cnpj,
-        NeedsCorrection = false,
-        RecommendedAction = "Nenhuma ação necessária",
-        IssueDescription = "CNPJ válido detectado",
-        IssueType = "None",
-        Severity = "Info"
-    };
-
-    var issues = new List<string>();
-
-    // Análise de potenciais problemas (apenas se não foi já tratado)
-    if (IsNumericOnlyValidation(line))
-    {
-        result.NeedsCorrection = true;
-        result.IssueType = "NumericValidation";
-        result.Severity = "High";
-        issues.Add("Validação assume apenas números");
-        result.RecommendedAction = "Atualizar validação para aceitar caracteres alfanuméricos";
-    }
-    else if (HasRigidLengthValidation(line))
-    {
-        result.NeedsCorrection = true;
-        result.IssueType = "LengthValidation";
-        result.Severity = "Medium";
-        issues.Add("Validação de tamanho muito rígida");
-        result.RecommendedAction = "Flexibilizar validação de tamanho";
-    }
-    else if (HasNumericSQLType(line))
-    {
-        result.NeedsCorrection = true;
-        result.IssueType = "SQLType";
-        result.Severity = "High";
-        issues.Add("Tipo de dados SQL inadequado");
-        result.RecommendedAction = "Alterar tipo de coluna para VARCHAR/NVARCHAR";
-    }
-
-    result.IssueDescription = issues.Any() ? string.Join("; ", issues) : "CNPJ válido detectado";
-    return result;
-}
-
-    private List<CNPJAnalysisResult> AnalyzeLine(string filePath, int lineNumber, string line)
-    {
-        var results = new List<CNPJAnalysisResult>();
-        var foundMatches = new HashSet<string>(); // Para evitar duplicatas
-
-        // Primeiro, verificar se a linha contém referências a CNPJ
-        if (ContainsCNPJReference(line))
-        {
-            // Analisar a linha para problemas potenciais (apenas uma vez)
-            var potentialIssue = AnalyzeCNPJReferenceLine(filePath, lineNumber, line);
-            if (potentialIssue != null)
-            {
-                results.Add(potentialIssue);
-                foundMatches.Add(potentialIssue.DetectedCNPJ); // Marcar como já processado
-            }
-        }
-
-        // Procurar por padrões de CNPJ específicos (só se não foi já analisado)
-        foreach (var pattern in CNPJPatterns)
-        {
-            var matches = pattern.Matches(line);
-            foreach (Match match in matches)
-            {
-                string cnpj = match.Groups.Count > 1 ? match.Groups[1].Value : match.Value;
-            
-                // Evitar duplicatas baseadas no CNPJ encontrado
-                if (!foundMatches.Contains(cnpj))
-                {
-                    var analysis = AnalyzeCNPJ(cnpj, filePath, lineNumber, line);
-                    if (analysis != null)
-                    {
-                        results.Add(analysis);
-                        foundMatches.Add(cnpj);
-                    }
-                }
-            }
-        }
-
-        return results;
-    }
-
-    private bool ContainsCNPJReference(string line)
-    {
-        var keywords = new[] { "cnpj", "CNPJ", "FormatCnpj", "formatCnpj", "cnpj_format", "cnpjFormat" };
-        return keywords.Any(keyword => line.Contains(keyword, StringComparison.OrdinalIgnoreCase));
-    }
-
-    
-    private CNPJAnalysisResult AnalyzeCNPJReferenceLine(string filePath, int lineNumber, string line)
-    {
-        var issues = new List<string>();
-        var severity = "Info";
-        var issueType = "CNPJReference";
-        var needsCorrection = false;
-
-        // Verificar problemas em ordem de prioridade
-        if (HasNumericConversion(line))
-        {
-            issues.Add("Conversão numérica não funcionará com CNPJs alfanuméricos");
-            severity = "High";
-            needsCorrection = true;
-            issueType = "NumericConversion";
-        }
-        else if (HasHardcodedFormatting(line))
-        {
-            issues.Add("Formatação hardcoded pode não funcionar com CNPJs alfanuméricos");
-            severity = "High";
-            needsCorrection = true;
-            issueType = "HardcodedFormat";
-        }
-        else if (HasRigidLengthValidation(line))
-        {
-            issues.Add("Validação de tamanho muito rígida");
-            severity = "Medium";
-            needsCorrection = true;
-            issueType = "LengthValidation";
-        }
-
-        // Só retornar resultado se há problemas reais
-        if (issues.Any())
-        {
-            return new CNPJAnalysisResult
-            {
-                FilePath = filePath,
-                LineNumber = lineNumber,
-                LineContent = line.Trim(),
-                DetectedCNPJ = "Referência a CNPJ detectada",
-                NeedsCorrection = needsCorrection,
-                RecommendedAction = GetRecommendationForIssueType(issueType),
-                IssueDescription = string.Join("; ", issues),
-                IssueType = issueType,
-                Severity = severity
-            };
-        }
-
-        return null; // Não retornar nada se não há problemas
-    }
-  
-
-
-    private string GetRecommendationForIssueType(string issueType)
-    {
-        return issueType switch
-        {
-            "NumericConversion" => "Remover conversões numéricas e tratar CNPJ como string",
-            "HardcodedFormat" => "Implementar formatação dinâmica que suporte caracteres alfanuméricos",
-            "LengthValidation" => "Flexibilizar validação de tamanho para aceitar variações",
-            "SQLType" => "Alterar tipo de coluna para VARCHAR/NVARCHAR",
-            _ => "Revisar código para compatibilidade com CNPJs alfanuméricos"
         };
     }
 
@@ -544,6 +806,7 @@ private CNPJAnalysisResult AnalyzeCNPJ(string cnpj, string filePath, int lineNum
         .line-number {{ color: #6c757d; font-weight: bold; }}
         .code {{ background: #e9ecef; padding: 5px; border-radius: 2px; font-family: monospace; }}
         .cnpj {{ color: #007bff; font-weight: bold; }}
+        .language-tag {{ background: #6c757d; color: white; padding: 2px 6px; border-radius: 3px; font-size: 12px; }}
     </style>
 </head>
 <body>
@@ -581,12 +844,25 @@ private CNPJAnalysisResult AnalyzeCNPJ(string cnpj, string filePath, int lineNum
             }
         }
 
+        if (stats.IssuesBySeverity.Any())
+        {
+            sb.AppendLine("<h2>⚠️ Problemas por Severidade</h2>");
+            foreach (var issue in stats.IssuesBySeverity.OrderByDescending(x => x.Value))
+            {
+                sb.AppendLine($"<p><strong>{issue.Key}:</strong> {issue.Value} ocorrências</p>");
+            }
+        }
+
         var groupedResults = results.GroupBy(r => r.FilePath);
         foreach (var fileGroup in groupedResults)
         {
+            var extension = Path.GetExtension(fileGroup.Key).ToLower();
             sb.AppendLine($@"
     <div class='file-section'>
-        <div class='file-title'>📄 {fileGroup.Key}</div>");
+        <div class='file-title'>
+            📄 {fileGroup.Key} 
+            <span class='language-tag'>{extension}</span>
+        </div>");
 
             foreach (var result in fileGroup.OrderBy(r => r.LineNumber))
             {
@@ -595,6 +871,8 @@ private CNPJAnalysisResult AnalyzeCNPJ(string cnpj, string filePath, int lineNum
         <div class='issue-item'>
             <div><span class='line-number'>Linha {result.LineNumber}</span> - CNPJ: <span class='cnpj'>{result.DetectedCNPJ}</span></div>
             <div><strong>Status:</strong> <span class='{severityClass}'>{(result.NeedsCorrection ? "⚠️ REQUER CORREÇÃO" : "✅ OK")}</span></div>
+            <div><strong>Tipo:</strong> {result.IssueType}</div>
+            <div><strong>Severidade:</strong> <span class='{severityClass}'>{result.Severity}</span></div>
             <div><strong>Problema:</strong> {result.IssueDescription}</div>
             <div><strong>Ação Recomendada:</strong> {result.RecommendedAction}</div>
             <div><strong>Código:</strong> <code class='code'>{result.LineContent}</code></div>
