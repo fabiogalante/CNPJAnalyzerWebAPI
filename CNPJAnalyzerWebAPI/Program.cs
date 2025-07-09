@@ -11,7 +11,7 @@ public static class Program
 
         // Services
         builder.Services.AddControllers();
-        builder.Services.AddScoped<CNPJAnalyzerService>();
+        builder.Services.AddScoped<CnpjAnalyzerService>();
         builder.Services.AddEndpointsApiExplorer();
         builder.Services.AddSwaggerGen();
 

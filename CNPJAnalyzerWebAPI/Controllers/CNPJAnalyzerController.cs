@@ -5,15 +5,8 @@ namespace CNPJAnalyzerWebAPI.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
-public class CNPJAnalyzerController : ControllerBase
+public class CnpjAnalyzerController(CnpjAnalyzerService analyzerService) : ControllerBase
 {
-    private readonly CNPJAnalyzerService _analyzerService;
-
-    public CNPJAnalyzerController(CNPJAnalyzerService analyzerService)
-    {
-        _analyzerService = analyzerService;
-    }
-
     [HttpPost("analyze")]
     public async Task<IActionResult> AnalyzeZipFile(IFormFile zipFile)
     {
@@ -34,8 +27,8 @@ public class CNPJAnalyzerController : ControllerBase
 
         try
         {
-            using var stream = zipFile.OpenReadStream();
-            var result = await _analyzerService.AnalyzeZipFileAsync(stream);
+            await using var stream = zipFile.OpenReadStream();
+            var result = await analyzerService.AnalyzeZipFileAsync(stream);
                 
             return Ok(result);
         }
