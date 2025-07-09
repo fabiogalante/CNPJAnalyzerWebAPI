@@ -101,6 +101,6 @@ public class HomeController : ControllerBase
 </body>
 </html>";
 
-        return Content(html, "text/html");
+        return Content(html, "text/html; charset=utf-8");
     }
 }
