@@ -7,12 +7,7 @@ namespace CNPJAnalyzerWebAPI.Analyzers
 {
     public class CNPJPatternAnalyzer
     {
-        private readonly IRecommendationService _recommendationService;
-
-        public CNPJPatternAnalyzer()
-        {
-            _recommendationService = new RecommendationService();
-        }
+        private readonly IRecommendationService _recommendationService = new RecommendationService();
 
         public CNPJAnalysisResult Analyze(string cnpj, string filePath, int lineNumber, string line)
         {

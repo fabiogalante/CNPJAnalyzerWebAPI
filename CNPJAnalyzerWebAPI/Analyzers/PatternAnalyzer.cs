@@ -64,6 +64,7 @@ public static class PatternAnalyzer
     {
         var problematicPatterns = new[]
         {
+            @"\b(long|int|short|byte|ulong|uint|ushort|sbyte)\s+[a-zA-Z0-9_]*[Cc]npj[a-zA-Z0-9_]*\b",
             @"\b(long|int|short|byte|ulong|uint|ushort|sbyte)\s+\w*[Cc]npj\w*\s*\{",
             @"\b(long|int|short|byte|ulong|uint|ushort|sbyte)\s+\w*[Cc]npj\w*\s*;",
             @"\b(long|int|short|byte|ulong|uint|ushort|sbyte)\s+\w*[Cc]npj\w*\s*=",
