@@ -19,7 +19,7 @@ namespace CNPJAnalyzerWebAPI.Configuration
 
         public static readonly string[] SupportedExtensions =
         {
-            ".cs", ".js", ".ts", ".json", ".xml", ".config", ".txt", ".sql",
+            ".cs", ".js", ".ts", ".json", ".xml", ".config", ".sql",
             ".html", ".htm", ".css", ".java", ".py", ".php", ".rb", ".go",
             ".cpp", ".c", ".h", ".hpp", ".yaml", ".yml", ".properties", ".ini",
             ".razor", ".cshtml", ".vb", ".fs", ".scala", ".kt", ".swift", ".dart",
@@ -135,18 +135,33 @@ namespace CNPJAnalyzerWebAPI.Configuration
 
         public static readonly Regex[] CNPJPatterns =
         {
-            // Padrões básicos de CNPJ
-            new Regex(@"\b\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}\b", RegexOptions.Compiled),
-            new Regex(@"\b\d{14}\b", RegexOptions.Compiled),
-        
-            // Padrões em atribuições (multilinguagem)
-            new Regex(@"(?:cnpj|document|registro|taxId|companyId)\s*[:=]\s*['""]?([0-9./\-]{14,18})['""]?", RegexOptions.Compiled | RegexOptions.IgnoreCase),
-            new Regex(@"\$(?:cnpj|document|registro|taxId|companyId)\s*=\s*['""]?([0-9./\-]{14,18})['""]?", RegexOptions.Compiled | RegexOptions.IgnoreCase), // PHP
-            new Regex(@"(?:cnpj|document|registro|taxId|companyId)\s*=\s*['""]?([0-9./\-]{14,18})['""]?", RegexOptions.Compiled | RegexOptions.IgnoreCase), // Python/Ruby
-        
-            // Padrões para validação de tamanho (multilinguagem)
-            new Regex(@"(?:cnpj|document)\.(?:length|Length|len|size)\s*[!=<>]+\s*14", RegexOptions.Compiled | RegexOptions.IgnoreCase),
-            new Regex(@"(?:len|length|strlen|LEN|LENGTH)\s*\(\s*\$?\w*cnpj\w*\s*\)\s*[!=<>]+\s*14", RegexOptions.Compiled | RegexOptions.IgnoreCase),
+             // Padrões existentes para valores
+        new Regex(@"\b\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}\b", RegexOptions.Compiled),
+        new Regex(@"\b\d{14}\b", RegexOptions.Compiled),
+        new Regex(@"cnpj\s*[:=]\s*['""]?([0-9./\-]{11,18})['""]?", RegexOptions.Compiled | RegexOptions.IgnoreCase),
+        new Regex(@"document\s*[:=]\s*['""]?([0-9./\-]{11,18})['""]?", RegexOptions.Compiled | RegexOptions.IgnoreCase),
+        new Regex(@"registro\s*[:=]\s*['""]?([0-9./\-]{11,18})['""]?", RegexOptions.Compiled | RegexOptions.IgnoreCase),
+        new Regex(@"taxId\s*[:=]\s*['""]?([0-9./\-]{11,18})['""]?", RegexOptions.Compiled | RegexOptions.IgnoreCase),
+        new Regex(@"companyId\s*[:=]\s*['""]?([0-9./\-]{11,18})['""]?",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase),
+        new Regex(@"cpf_cnpj\s*[:=]\s*['""]?([0-9./\-]{11,18})['""]?", RegexOptions.Compiled | RegexOptions.IgnoreCase),
+        new Regex(@"empresa_cnpj\s*[:=]\s*['""]?([0-9./\-]{11,18})['""]?",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase),
+        new Regex(@"nr_cnpj\s*[:=]\s*['""]?([0-9./\-]{11,18})['""]?", RegexOptions.Compiled | RegexOptions.IgnoreCase),
+
+        // NOVOS PADRÕES para declarações de propriedades/variáveis
+        new Regex(@"\b(long|int|Int32|Int64)\s+\w*[Cc]npj\w*\s*[{;]", RegexOptions.Compiled | RegexOptions.IgnoreCase),
+        new Regex(@"\b(long|int|Int32|Int64)\s+\w*[Cc]npj\w*\s*\{", RegexOptions.Compiled | RegexOptions.IgnoreCase),
+        new Regex(@"public\s+(long|int|Int32|Int64)\s+\w*[Cc]npj\w*", RegexOptions.Compiled | RegexOptions.IgnoreCase),
+        new Regex(@"private\s+(long|int|Int32|Int64)\s+\w*[Cc]npj\w*", RegexOptions.Compiled | RegexOptions.IgnoreCase),
+        new Regex(@"protected\s+(long|int|Int32|Int64)\s+\w*[Cc]npj\w*",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase),
+        new Regex(@"\w*[Cc]npj\w*\s*:\s*(long|int|Int32|Int64)",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase), // Para registros
+
+        // Padrões para outros tipos problemáticos
+        new Regex(@"\b(decimal|double|float)\s+\w*[Cc]npj\w*\s*[{;]", RegexOptions.Compiled | RegexOptions.IgnoreCase),
+        new Regex(@"public\s+(decimal|double|float)\s+\w*[Cc]npj\w*", RegexOptions.Compiled | RegexOptions.IgnoreCase)
         };
     }
 }

@@ -21,6 +21,9 @@ namespace CNPJAnalyzerWebAPI.Analyzers
                 return null; // Já foi processado pela análise de referência
             }
 
+
+            if (!line.Contains("cnpj", StringComparison.OrdinalIgnoreCase)) return null;
+;            
             // Verificar se a linha contém padrões problemáticos mesmo sem CNPJ válido
             var hasProblematicPattern = PatternAnalyzer.HasNumericConversion(line) ||
                                         PatternAnalyzer.HasHardcodedFormatting(line) ||
