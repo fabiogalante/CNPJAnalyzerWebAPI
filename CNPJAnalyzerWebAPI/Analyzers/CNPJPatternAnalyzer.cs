@@ -9,7 +9,7 @@ namespace CNPJAnalyzerWebAPI.Analyzers
     {
         private readonly IRecommendationService _recommendationService = new RecommendationService();
 
-        public CNPJAnalysisResult Analyze(string cnpj, string filePath, int lineNumber, string line)
+        public CNPJAnalysisResult? Analyze(string cnpj, string filePath, int lineNumber, string line)
         {
             string cleanCNPJ = Regex.Replace(cnpj, @"[^\d]", "");
 
